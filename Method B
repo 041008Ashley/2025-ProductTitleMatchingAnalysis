@@ -1,0 +1,232 @@
+import re
+import numpy as np
+from functools import lru_cache
+import Levenshtein
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# 动态模式识别（不依赖固定列表）
+CLEAN_PATTERN = re.compile(r'[^\w\s\u4e00-\u9fff]')
+NUMERIC_PATTERN = re.compile(r'\b\d+\.?\d*\b')
+
+@lru_cache(maxsize=5000)
+def preprocess_text(text):
+    """自适应预处理"""
+    if not isinstance(text, str):
+        text = str(text)
+    
+    # 基础清洗
+    text = text.lower().strip()
+    text = CLEAN_PATTERN.sub(' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    
+    # 动态单位归一化
+    text = re.sub(r'(\d+)\s*(gb|g)\b', r'\1gb', text)
+    text = re.sub(r'(\d+)\s*(inch|英寸)\b', r'\1英寸', text)
+    text = re.sub(r'(\d+)\s*(匹|p)\b', r'\1匹', text)
+    
+    return text
+
+def calculate_similarities(title_pairs):
+    """批量计算相似度（TF-IDF权重降低到0.2）"""
+    # 提取所有标题构建语料库
+    all_titles = []
+    for t1, t2 in title_pairs:
+        all_titles.append(preprocess_text(t1))
+        all_titles.append(preprocess_text(t2))
+    
+    # 创建TF-IDF向量化器
+    vectorizer = TfidfVectorizer(tokenizer=lambda x: x.split(), token_pattern=None)
+    tfidf_matrix = vectorizer.fit_transform(all_titles)
+    
+    preprocessed = [(preprocess_text(t1), preprocess_text(t2)) for t1, t2 in title_pairs]
+    results = []
+    
+    for i, (t1, t2) in enumerate(preprocessed):
+        # 计算TF-IDF余弦相似度
+        idx1 = i * 2
+        idx2 = i * 2 + 1
+        tfidf_sim = cosine_similarity(tfidf_matrix[idx1], tfidf_matrix[idx2])[0][0]
+        
+        # 计算其他相似度
+        other_sim = compute_similarity(t1, t2)
+        
+        # 调整权重：TF-IDF占20%，其他方法占80%
+        final_sim = 0.2 * tfidf_sim + 0.8 * other_sim
+        results.append(round(final_sim, 4))
+    
+    return results
+
+def compute_similarity(t1, t2):
+    """智能相似度计算引擎"""
+    if not t1 and not t2:
+        return 0.0
+    if not t1 or not t2:
+        return 0.1
+    if t1 == t2:
+        return 1.0
+    
+    # 核心相似度维度
+    char_sim = character_similarity(t1, t2)
+    token_sim = token_similarity(t1, t2)
+    num_sim = numeric_similarity(t1, t2)
+    order_sim = order_similarity(t1, t2)
+    semantic_sim = semantic_analysis(t1, t2) 
+    
+    metrics = [char_sim, token_sim, num_sim, order_sim, semantic_sim]
+    weights = adaptive_weights(metrics)
+    
+    final_sim = sum(w * m for w, m in zip(weights, metrics))
+    return max(0.0, min(1.0, final_sim))
+
+def semantic_analysis(text1, text2):
+    """动态语义分析（解决核心问题）"""
+    # 1. 关键特征差异检测
+    diff_features = detect_feature_differences(text1, text2)
+    if diff_features > 3:  # 多个关键特征不同
+        return max(0.1, 0.7 - diff_features * 0.1)
+    
+    # 2. 型号一致性检测
+    model_match = detect_model_consistency(text1, text2)
+    if not model_match:
+        return 0.4  # 型号不匹配时降低相似度
+    
+    # 3. 属性差异评估
+    return evaluate_attribute_differences(text1, text2)
+
+def detect_feature_differences(text1, text2):
+    """检测关键特征差异数量"""
+    # 动态识别可能的关键特征词
+    feature_keywords = set()
+    for word in text1.split() + text2.split():
+        if len(word) > 3 and not word.isdigit():
+            feature_keywords.add(word)
+    
+    # 计算特征差异
+    features1 = set(text1.split()) & feature_keywords
+    features2 = set(text2.split()) & feature_keywords
+    return len(features1.symmetric_difference(features2))
+
+def detect_model_consistency(text1, text2):
+    """检测型号一致性"""
+    # 提取可能的型号标识（数字+字母组合）
+    models1 = re.findall(r'\b[\w\d]{3,}\b', text1)
+    models2 = re.findall(r'\b[\w\d]{3,}\b', text2)
+    
+    # 寻找共同型号前缀
+    for model in models1:
+        if any(model in m for m in models2):
+            return True
+    return False
+
+def evaluate_attribute_differences(text1, text2):
+    """评估属性差异程度"""
+    # 1. 颜色差异检测
+    colors1 = set(re.findall(r'\b(黑|白|银|蓝|金|粉|红|绿|灰|紫)\b', text1))
+    colors2 = set(re.findall(r'\b(黑|白|银|蓝|金|粉|红|绿|灰|紫)\b', text2))
+    color_diff = 0 if colors1 == colors2 else 0.2
+    
+    # 2. 容量/尺寸差异
+    nums1 = [float(x) for x in NUMERIC_PATTERN.findall(text1)]
+    nums2 = [float(x) for x in NUMERIC_PATTERN.findall(text2)]
+    num_diff = abs(np.mean(nums1) - np.mean(nums2)) if nums1 and nums2 else 0
+    
+    # 3. 版本差异
+    version_terms = {'pro', 'max', 'lite', 'plus', '标准版', '豪华版', '套装'}
+    versions1 = set(text1.split()) & version_terms
+    versions2 = set(text2.split()) & version_terms
+    version_diff = 0 if versions1 == versions2 else 0.15
+    
+    return max(0.7, 1.0 - color_diff - min(0.3, num_diff/100) - version_diff)
+
+def character_similarity(text1, text2):
+    """编辑距离相似度（优化短文本）"""
+    if len(text1) < 5 or len(text2) < 5:
+        # 短文本特殊处理
+        return 1.0 if text1 == text2 else 0.0
+    
+    distance = Levenshtein.distance(text1, text2)
+    max_len = max(len(text1), len(text2))
+    return 1.0 - distance / max_len
+
+def token_similarity(text1, text2):
+    """增强的Jaccard相似度"""
+    tokens1 = set(text1.split())
+    tokens2 = set(text2.split())
+    
+    if not tokens1 and not tokens2:
+        return 0.0
+    
+    # 动态权重：长词和数字词更高权重
+    weight = lambda w: 1.5 if w.isdigit() else (1 + len(w)/10)
+    
+    inter = tokens1 & tokens2
+    union = tokens1 | tokens2
+    
+    inter_weight = sum(weight(w) for w in inter)
+    union_weight = sum(weight(w) for w in union)
+    
+    return inter_weight / union_weight if union_weight > 0 else 0.0
+
+def numeric_similarity(text1, text2):
+    """智能数字相似度"""
+    nums1 = [float(x) for x in NUMERIC_PATTERN.findall(text1)]
+    nums2 = [float(x) for x in NUMERIC_PATTERN.findall(text2)]
+    
+    if not nums1 and not nums2:
+        return 0.8  # 无数字时更高相似度
+    
+    if not nums1 or not nums2:
+        return 0.5
+    
+    # 相对差异评估
+    avg1 = np.mean(nums1) if nums1 else 0
+    avg2 = np.mean(nums2) if nums2 else 0
+    diff = abs(avg1 - avg2)
+    
+    if diff == 0:
+        return 1.0
+    elif diff < 10:
+        return 0.9
+    elif diff < 50:
+        return 0.7
+    else:
+        return 0.5
+
+def order_similarity(text1, text2):
+    """优化的LCS相似度"""
+    tokens1 = text1.split()
+    tokens2 = text2.split()
+    
+    if not tokens1 or not tokens2:
+        return 0.0
+    
+    # 使用高效的LCS计算
+    m, n = len(tokens1), len(tokens2)
+    dp = [0] * (n + 1)
+    
+    for i in range(1, m + 1):
+        prev = 0
+        for j in range(1, n + 1):
+            current = dp[j]
+            if tokens1[i-1] == tokens2[j-1]:
+                dp[j] = prev + 1
+            else:
+                dp[j] = max(dp[j], dp[j-1])
+            prev = current
+    
+    lcs_len = dp[n]
+    return lcs_len / max(m, n)
+
+def adaptive_weights(metrics):
+    """动态权重分配"""
+    # 为语义分析分配更高权重
+    base_weights = [0.15, 0.20, 0.15, 0.15, 0.35]
+    
+    # 根据指标质量调整
+    adjustments = [min(1.0, metric * 1.5) for metric in metrics]
+    adjusted_weights = [w * a for w, a in zip(base_weights, adjustments)]
+    
+    # 归一化
+    total = sum(adjusted_weights)
+    return [w/total for w in adjusted_weights] if total > 0 else base_weights
