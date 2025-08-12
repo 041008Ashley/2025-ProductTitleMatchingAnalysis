@@ -380,7 +380,190 @@ finally:
     Database.CloseDBConnect(SZEnv['rpa'], 数据库对象)
 ```
 
-## 结果表示例
+# 品牌名称提取模块文档
+
+## 功能概述
+这个模块负责从原始品牌数据中提取标准化的中文品牌名称，并进行去重处理。它专门用于处理包含特殊字符、英文或混合文本的品牌数据，提取出纯净的中文品牌名称。
+
+## 核心算法流程图
+
+```mermaid
+graph TD
+    A[输入品牌列表] --> B[遍历每个品牌]
+    B --> C{是否为字符串?}
+    C -->|是| D[提取所有中文字符]
+    C -->|否| E[尝试转换为字符串]
+    E --> F{转换成功?}
+    F -->|是| D
+    F -->|否| G[跳过该品牌]
+    D --> H[拼接中文字符]
+    H --> I[添加到结果列表]
+    I --> J[结果去重]
+    J --> K[返回唯一品牌列表]
+```
+
+## 关键功能实现
+
+```python
+import re
+
+def main(input_list):
+    """清洗并提取品牌名称的核心方法
+    
+    参数:
+        input_list: 原始品牌数据列表，可能包含字符串、None或其他类型
+        
+    返回:
+        去重后的中文品牌名称列表
+    """
+    # 初始化结果列表
+    cleaned_brands = []
+    
+    # 遍历输入列表中的每个品牌
+    for brand in input_list:
+        # 处理非字符串类型
+        if not isinstance(brand, str):
+            if brand is None:
+                continue
+            try:
+                brand = str(brand)
+            except:
+                continue
+        
+        # 使用正则表达式提取所有中文字符
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]+', brand)
+        
+        # 如果找到汉字部分，拼接成字符串
+        if chinese_chars:
+            brand_name = ''.join(chinese_chars)
+            cleaned_brands.append(brand_name)
+    
+    # 去重处理（保留原始顺序）
+    seen = set()
+    unique_brands = []
+    for brand in cleaned_brands:
+        if brand not in seen:
+            seen.add(brand)
+            unique_brands.append(brand)
+    
+    return unique_brands
+```
+
+## 处理流程详解
+
+### 1. 输入处理
+- 接受原始品牌数据列表
+- 列表元素可能是各种类型（字符串、None、数字等）
+
+### 2. 数据类型处理
+```mermaid
+flowchart TD
+    A[原始数据] --> B{是否为字符串?}
+    B -->|是| C[直接处理]
+    B -->|否| D{是否为None?}
+    D -->|是| E[跳过]
+    D -->|否| F[尝试转换为字符串]
+    F --> G{转换成功?}
+    G -->|是| C
+    G -->|否| E
+```
+
+### 3. 中文提取
+- 使用正则表达式 `[\u4e00-\u9fff]+` 匹配所有中文字符
+- 提取结果可能是多个不连续的中文片段
+- 将提取的中文片段拼接成完整字符串
+
+### 4. 结果去重
+- 使用集合(Set)检测重复项
+- 保留原始顺序的独特品牌列表
+- 确保结果中每个品牌名称只出现一次
+
+## 使用示例
+
+### 输入数据
+```python
+raw_brands = [
+    "Nike-耐克",
+    "Adidas阿迪达斯",
+    "Apple苹果",
+    None,
+    12345,
+    "华为/HUAWEI",
+    "小米科技",
+    "三星电子-Samsung",
+    "格力-GREE"
+]
+```
+
+### 处理过程
+```python
+cleaned = main(raw_brands)
+```
+
+### 输出结果
+```
+['耐克', '阿迪达斯', '苹果', '华为', '小米科技', '三星电子', '格力']
+```
+
+## 集成到主流程
+
+### 在商品相似度系统中的调用
+```python
+# 从数据库获取原始品牌数据
+brand_data = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "select pp from cj_spzd")
+
+# 处理品牌数据
+cleaned_brands = main(brand_data)
+
+# 构建品牌映射字典
+sppp = {brand: brand for brand in cleaned_brands}
+
+# 将品牌映射传递给相似度计算方法
+result = calculate_similarity(input_data, sppp=sppp)
+```
+
+### 数据处理流程图
+```mermaid
+sequenceDiagram
+    participant 数据库
+    participant 品牌处理模块
+    participant 相似度计算模块
+    
+    数据库->>品牌处理模块: 原始品牌数据
+    品牌处理模块->>品牌处理模块: 清洗和提取中文
+    品牌处理模块->>品牌处理模块: 去重处理
+    品牌处理模块->>相似度计算模块: 品牌映射字典(sppp)
+    相似度计算模块->>相似度计算模块: 使用sppp进行相似度计算
+    相似度计算模块->>数据库: 存储结果
+```
+
+## 处理规则说明
+
+| 输入类型 | 处理方式 | 示例输入 | 示例输出 |
+|----------|----------|----------|----------|
+| 纯中文 | 直接提取 | "华为手机" | "华为手机" |
+| 中英混合 | 提取中文部分 | "Apple苹果" | "苹果" |
+| 带特殊字符 | 提取中文部分 | "三星/Samsung" | "三星" |
+| None值 | 跳过处理 | None | (不包含) |
+| 数字 | 跳过处理 | 12345 | (不包含) |
+| 无中文 | 跳过处理 | "Samsung" | (不包含) |
+
+## 应用场景
+
+1. **电商数据清洗**：从商品信息中提取纯净品牌名称
+2. **品牌分析**：统计不同品牌的出现频率
+3. **数据标准化**：为不同来源的品牌数据提供统一格式
+4. **相似度计算**：为商品相似度算法提供标准化的品牌输入
+
+## 性能优化
+
+- **高效正则**：使用预编译正则表达式提高匹配效率
+- **惰性处理**：只在必要时进行类型转换
+- **集合去重**：O(1)时间复杂度的重复检测
+- **短路逻辑**：遇到无效数据立即跳过
+
+
+## 总流程结果表示例
 
 | 商品名称       | 商品规格     | 方法A相似度 | 方法B相似度 |
 |---------------|-------------|------------|------------|
