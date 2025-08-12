@@ -27,11 +27,24 @@ def preprocess_text(text):
     
     return text
 
-def calculate_similarities(title_pairs):
-    """批量计算相似度（TF-IDF权重降低到0.2）"""
+def calculate_similarities(input_data):
+
+    # 输入格式校验与标准化：确保输入是“批量文本对列表”
+    if isinstance(input_data, (list, tuple)):
+        # 若输入是单个二元组（如(text1, text2)），转为列表包裹
+        if len(input_data) == 2 and all(isinstance(x, (str, int, float)) for x in input_data):
+            title_pairs = [input_data]
+        # 若输入是批量二元组列表，直接使用
+        elif all(isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in input_data):
+            title_pairs = input_data
+        else:
+            raise ValueError("输入格式错误！批量处理时需传入二元组列表（如[(a,b), (c,d)]）")
+    else:
+        raise TypeError("输入必须是单个二元组或二元组列表")
+    
     # 提取所有标题构建语料库
     all_titles = []
-    for t1, t2 in title_pairs:
+    for t1, t2 in title_pairs:  # 此时title_pairs必然是“二元组列表”，可安全解包
         all_titles.append(preprocess_text(t1))
         all_titles.append(preprocess_text(t2))
     
@@ -55,7 +68,8 @@ def calculate_similarities(title_pairs):
         final_sim = 0.2 * tfidf_sim + 0.8 * other_sim
         results.append(round(final_sim, 4))
     
-    return results
+    # 若输入是单个文本对，返回单个值；否则返回列表
+    return results[0] if len(title_pairs) == 1 else results
 
 def compute_similarity(t1, t2):
     """智能相似度计算引擎"""
@@ -71,7 +85,7 @@ def compute_similarity(t1, t2):
     token_sim = token_similarity(t1, t2)
     num_sim = numeric_similarity(t1, t2)
     order_sim = order_similarity(t1, t2)
-    semantic_sim = semantic_analysis(t1, t2) 
+    semantic_sim = semantic_analysis(t1, t2)  # 新增语义分析
     
     metrics = [char_sim, token_sim, num_sim, order_sim, semantic_sim]
     weights = adaptive_weights(metrics)
