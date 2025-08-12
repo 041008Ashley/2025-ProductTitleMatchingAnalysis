@@ -1,11 +1,9 @@
 import pandas as pd
 import re
-from rapidfuzz import fuzz, process
-from collections import Counter
+from rapidfuzz import fuzz
 import json
 import os
 import logging
-
 
 # 配置日志
 logging.basicConfig(
@@ -18,66 +16,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ProductSimilarity")
 
-def calculate_similarity(input_data, config_path=None, debug=False):
+def calculate_similarity(input_data, config_path=None, debug=False, sppp=None):
     """
     商品名称相似度计算主函数（兼容RPA调用）
     
     参数:
-        input_data: 输入数据，可以是DataFrame或列表
+        input_data: 输入数据，应为包含两个元素的列表（如[文本1, 文本2]）
         config_path: 配置文件路径，默认为None
         debug: 是否开启调试模式，开启后会输出详细日志
+        sppp: 从数据库导入的品牌映射字典，格式为{'品牌别名': '标准品牌名'}
     
     返回:
-        相似度列表，元素为0-1之间的浮点数
+        相似度分数（0-1之间的浮点数）
     """
     try:
-        # 初始化计算器
-        calculator = ProductSimilarityCalculator(config_path, debug)
+        # 初始化计算器（传入sppp）
+        calculator = ProductSimilarityCalculator(config_path, debug, sppp)
         
-        # 处理输入数据
-        if isinstance(input_data, pd.DataFrame):
-            data = input_data
-        elif isinstance(input_data, list):
-            if not input_data:
-                logger.warning("输入数据为空列表")
-                return []
-            # 检查列表元素类型
-            if isinstance(input_data[0], dict):
-                data = pd.DataFrame(input_data)
-            else:
-                # 假设是二维列表，每行为两个商品名称
-                data = pd.DataFrame(input_data, columns=["商品A", "商品B"])
+        # 处理输入数据（确保为一对文本）
+        if isinstance(input_data, list) and len(input_data) == 2:
+            # 提取两个文本（转为字符串处理）
+            str1 = str(input_data[0]).strip() if input_data[0] is not None else ""
+            str2 = str(input_data[1]).strip() if input_data[1] is not None else ""
         else:
-            logger.error(f"不支持的输入数据类型: {type(input_data)}")
-            raise TypeError("输入数据必须是DataFrame或列表")
+            logger.error(f"输入数据格式错误，需为包含两个元素的列表，实际为: {type(input_data)}")
+            raise TypeError("输入数据必须是包含两个文本的列表（如[文本1, 文本2]）")
         
-        # 计算相似度
-        similarities = calculator.calculate_similarity(data)
-        return similarities
+        # 计算单对文本的相似度
+        similarity = calculator._calculate_pair_similarity(str1, str2)
+        return similarity  # 返回单个浮点数
     
     except Exception as e:
         logger.error(f"相似度计算失败: {str(e)}", exc_info=True)
-        # 返回与输入长度相同的默认值列表
-        if isinstance(input_data, pd.DataFrame):
-            return [0.0] * len(input_data)
-        elif isinstance(input_data, list):
-            return [0.0] * len(input_data)
-        else:
-            return []
+        return 0.0  # 异常时返回默认值
 
 class ProductSimilarityCalculator:
     """通用商品名称相似度计算工具"""
     
-    def __init__(self, config_path=None, debug=False):
-        """
-        初始化计算器
-        
-        参数:
-            config_path: 配置文件路径
-            debug: 是否开启调试模式
-        """
+    def __init__(self, config_path=None, debug=False, sppp=None):
+        """初始化计算器"""
         self.debug = debug
-        self.config = self._load_config(config_path)
+        self.config = self._load_config(config_path, sppp)  # 传入sppp
         self._validate_config()
         
         # 从配置中提取参数
@@ -99,16 +78,8 @@ class ProductSimilarityCalculator:
         if self.debug:
             logger.info(f"配置加载完成: {self.config}")
     
-    def _load_config(self, config_path):
-        """
-        加载配置文件
-        
-        参数:
-            config_path: 配置文件路径
-            
-        返回:
-            配置字典
-        """
+    def _load_config(self, config_path, sppp=None):
+        """加载配置文件（增加sppp参数）"""
         # 默认配置
         default_config = {
             "brand_mapping": {
@@ -171,113 +142,12 @@ class ProductSimilarityCalculator:
                 "双开门": ["对开门"],
                 "无线": ["蓝牙", "wifi"],
                 "高清": ["4k", "ultra hd"],
-                "充电": ["快充", "无线充电"],
-                "游戏": ["电竞", "gaming"],
-                "超薄": ["轻薄", "纤薄"],
-                "大屏": ["大屏幕", "巨屏"],
-                "小屏": ["小屏幕", "迷你屏"],
-                "智能": ["智慧", "smart"],
-                "自动": ["智能", "全自动"],
-                "机械": ["手动", "半自动"],
-                "防水": ["防泼水", "水密"],
-                "防尘": ["防灰尘", "气密"],
-                "运动": ["户外", "健身"],
-                "商务": ["办公", "职场"],
-                "家用": ["家庭", "民用"],
-                "专业": ["pro", "professional"],
-                "学生": ["校园", "学习"],
-                "旅行": ["出差", "旅游"],
-                "儿童": ["小孩", "宝宝"],
-                "成人": ["大人", "成年人"],
-                "女士": ["女性", "女孩"],
-                "男士": ["男性", "男孩"],
-                "经典": ["传统", "复古"],
-                "新款": ["新品", "最新款"],
-                "限量": ["限定", "限量版"],
-                "豪华": ["奢华", "高端"],
-                "经济": ["实惠", "性价比高"],
-                "基础": ["入门", "标准版"],
-                "高级": ["进阶", "升级版"],
-                "加强": ["增强", "升级版"],
-                "标准": ["普通", "标准版"],
-                "迷你": ["mini", "小型"],
-                "大型": ["max", "大号"],
-                "中型": ["中号", "标准"],
-                "折叠": ["可折叠", "折叠式"],
-                "旋转": ["可旋转", "旋转式"],
-                "触屏": ["触摸屏", "触控屏"],
-                "语音": ["声控", "语音控制"],
-                "指纹": ["指纹识别", "指纹锁"],
-                "面部": ["人脸识别", "面部识别"],
-                "智能": ["智慧", "smart"],
-                "自动": ["智能", "全自动"],
-                "机械": ["手动", "半自动"],
-                "防水": ["防泼水", "水密"],
-                "防尘": ["防灰尘", "气密"],
-                "运动": ["户外", "健身"],
-                "商务": ["办公", "职场"],
-                "家用": ["家庭", "民用"],
-                "专业": ["pro", "professional"],
-                "学生": ["校园", "学习"],
-                "旅行": ["出差", "旅游"],
-                "儿童": ["小孩", "宝宝"],
-                "成人": ["大人", "成年人"],
-                "女士": ["女性", "女孩"],
-                "男士": ["男性", "男孩"],
-                "经典": ["传统", "复古"],
-                "新款": ["新品", "最新款"],
-                "限量": ["限定", "限量版"],
-                "豪华": ["奢华", "高端"],
-                "经济": ["实惠", "性价比高"],
-                "基础": ["入门", "标准版"],
-                "高级": ["进阶", "升级版"],
-                "加强": ["增强", "升级版"],
-                "标准": ["普通", "标准版"],
-                "迷你": ["mini", "小型"],
-                "大型": ["max", "大号"],
-                "中型": ["中号", "标准"],
-                "折叠": ["可折叠", "折叠式"],
-                "旋转": ["可旋转", "旋转式"],
-                "触屏": ["触摸屏", "触控屏"],
-                "语音": ["声控", "语音控制"],
-                "指纹": ["指纹识别", "指纹锁"],
-                "面部": ["人脸识别", "面部识别"]
+                "充电": ["快充", "无线充电"]
             },
             "stop_words": [
                 "的", "了", "和", "是", "在", "我", "有", "要", "就", "不", "人", "都", 
                 "款", "式", "系列", "装", "版", "型", "号", "限定", "限定款", "经典款", 
-                "正品", "行货", "水货", "原装", "全新", "二手", "港版", "国行", "美行", 
-                "韩版", "日版", "欧版", "特价", "促销", "优惠", "限量", "抢购", "热卖", 
-                "爆款", "畅销", "推荐", "热销", "新品", "新款", "旧款", "老款", "升级版", 
-                "基础版", "标准版", "豪华版", "旗舰版", "入门版", "专业版", "商务版", 
-                "家用版", "学生版", "女士版", "男士版", "儿童版", "成人版", "运动版", 
-                "时尚版", "经典版", "复古版", "现代版", "简约版", "奢华版", "经济版", 
-                "加强版", "普通版", "迷你版", "大型版", "中型版", "折叠版", "旋转版", 
-                "触屏版", "语音版", "指纹版", "面部版", "智能版", "自动版", "机械版", 
-                "防水版", "防尘版", "运动版", "商务版", "家用版", "专业版", "学生版", 
-                "旅行版", "儿童版", "成人版", "女士版", "男士版", "经典版", "新款", "限量版", 
-                "豪华版", "经济版", "基础版", "高级版", "加强版", "标准版", "迷你版", "大型版", 
-                "中型版", "折叠版", "旋转版", "触屏版", "语音版", "指纹版", "面部版", "中", 
-                "小", "大", "特", "超", "极", "最", "顶级", "高端", "中端", "低端", "特价", 
-                "促销", "优惠", "折扣", "满减", "买赠", "限时", "秒杀", "抢购", "热卖", "爆款", 
-                "畅销", "推荐", "热销", "新品", "新款", "旧款", "老款", "新版", "旧版", "原装", 
-                "正品", "行货", "水货", "进口", "国产", "包邮", "不包邮", "免费", "付费", "试用", 
-                "体验", "测试", "测评", "评测", "报告", "分析", "比较", "对比", "推荐", "精选", 
-                "优选", "优质", "特价", "优惠", "促销", "折扣", "满减", "买赠", "限时", "秒杀", 
-                "抢购", "热卖", "爆款", "畅销", "推荐", "热销", "新品", "新款", "旧款", "老款", 
-                "升级版", "基础版", "标准版", "豪华版", "旗舰版", "入门版", "专业版", "商务版", 
-                "家用版", "学生版", "女士版", "男士版", "儿童版", "成人版", "运动版", "时尚版", 
-                "经典版", "复古版", "现代版", "简约版", "奢华版", "经济版", "加强版", "普通版", 
-                "迷你版", "大型版", "中型版", "折叠版", "旋转版", "触屏版", "语音版", "指纹版", 
-                "面部版", "智能版", "自动版", "机械版", "防水版", "防尘版", "运动版", "商务版", 
-                "家用版", "专业版", "学生版", "旅行版", "儿童版", "成人版", "女士版", "男士版", 
-                "经典版", "新款", "限量版", "豪华版", "经济版", "基础版", "高级版", "加强版", 
-                "标准版", "迷你版", "大型版", "中型版", "折叠版", "旋转版", "触屏版", "语音版", 
-                "指纹版", "面部版", "中", "小", "大", "特", "超", "极", "最", "顶级", "高端", "中端", 
-                "低端", "特价", "促销", "优惠", "折扣", "满减", "买赠", "限时", "秒杀", "抢购", "热卖", 
-                "爆款", "畅销", "推荐", "热销", "新品", "新款", "旧款", "老款", "新版", "旧版", "原装", 
-                "正品", "行货", "水货", "进口", "国产", "包邮", "不包邮", "免费", "付费", "试用", "体验", 
-                "测试", "测评", "评测", "报告", "分析", "比较", "对比", "推荐", "精选", "优选", "优质"
+                "正品", "行货", "水货", "原装", "全新", "二手", "港版", "国行"
             ],
             "feature_weights": {
                 "brand": 0.4,
@@ -293,22 +163,20 @@ class ProductSimilarityCalculator:
             },
             "color_words": [
                 "红", "蓝", "黑", "白", "灰", "金", "银", "紫", "绿", "粉", "黄", "橙", "棕", "青", 
-                "深空灰", "远峰蓝", "星光色", "曜石黑", "陶瓷白", "玫瑰金", "薄荷绿", "珊瑚橙", 
-                "朱砂红", "墨玉青", "丹霞橙", "翡冷翠", "钛金属", "香槟金", "石墨灰", "午夜黑", 
-                "雪影白", "青山黛", "云锦白", "琉璃黑", "丹霞橙", "青空蓝", "幻夜黑", "绮境森林", 
-                "萤石黑", "星河银", "天青色", "鎏金黑", "琉璃金", "暗夜紫", "云锦白", "松绿石", 
-                "珊瑚红", "月光银", "冰川蓝", "暗夜黑", "星夜黑", "冰岛白", "极光紫", "幻夜紫"
+                "深空灰", "远峰蓝", "星光色", "曜石黑", "陶瓷白", "玫瑰金"
             ],
             "extended_brands": [
-                "Pro", "Max", "Mini", "Ultra", "Plus", "Lite", "Premium", "Elite", "Note", "S", "SE", 
-                "Air", "Book", "Pad", "Phone", "Watch", "TV", "Hub", "Studio", "Display", "Station", 
-                "Drive", "Pod", "Beats", "Neo", "Vision", "Go", "Fit", "Play", "Game", "Laptop", "Desktop", 
-                "Tablet", "Smartphone", "Headphones", "Speaker", "Camera", "Drone", "Robot", "Car", "Bike", 
-                "Scooter", "Helmet", "Glasses", "Ring", "Bracelet", "Necklace", "Earrings", "Bag", "Wallet", 
-                "Case", "Cover", "Stand", "Charger", "Cable", "Adapter", "Battery", "Power", "Hub", "Dock", 
-                "Station", "Drive", "Pod", "Beats", "Neo", "Vision", "Go", "Fit", "Play", "Game"
+                "Pro", "Max", "Mini", "Ultra", "Plus", "Lite", "Premium", 
+                "Note", "S", "SE", "Air", "Book", "Pad", "Phone", "Watch"
             ]
         }
+        
+        # 合并数据库品牌映射
+        if sppp and isinstance(sppp, dict):
+            # 更新默认品牌映射
+            default_config["brand_mapping"].update(sppp)
+            if self.debug:
+                logger.info(f"已合并数据库品牌映射: {len(sppp)}条记录")
         
         # 加载自定义配置
         if config_path and os.path.exists(config_path):
@@ -335,15 +203,7 @@ class ProductSimilarityCalculator:
                 self.config["feature_weights"] = {k: v/total for k, v in weights.items()}
     
     def preprocess_text(self, text):
-        """
-        文本预处理
-        
-        参数:
-            text: 输入文本
-            
-        返回:
-            处理后的文本
-        """
+        """文本预处理"""
         if not isinstance(text, str) or not text.strip():
             return ""
         
@@ -370,10 +230,6 @@ class ProductSimilarityCalculator:
             text = re.sub(r'(\d+)\s*(升|l)\b', r'\1l', text)
             text = re.sub(r'(\d+)\s*(寸|英寸)\b', r'\1英寸', text)
             text = re.sub(r'(\d+)\s*(匹|p)\b', r'\1匹', text)
-            text = re.sub(r'(\d+)\s*(kg|千克)\b', r'\1kg', text)
-            text = re.sub(r'(\d+)\s*(cm|厘米)\b', r'\1cm', text)
-            text = re.sub(r'(\d+)\s*(m|米)\b', r'\1m', text)
-            text = re.sub(r'(\d+)\s*(mm|毫米)\b', r'\1mm', text)
             
             # 移除停用词
             for word in self.stop_words:
@@ -388,15 +244,7 @@ class ProductSimilarityCalculator:
             return ""
     
     def extract_features(self, text):
-        """
-        提取文本特征
-        
-        参数:
-            text: 输入文本
-            
-        返回:
-            特征字典
-        """
+        """提取文本特征"""
         features = {
             "brand": "",
             "model": "",
@@ -438,15 +286,7 @@ class ProductSimilarityCalculator:
             return features
     
     def _extract_brand(self, text):
-        """
-        提取品牌
-        
-        参数:
-            text: 输入文本
-            
-        返回:
-            品牌名称
-        """
+        """提取品牌"""
         # 检查品牌映射
         for abbr, brand in self.brand_mapping.items():
             if abbr.lower() in text.lower():
@@ -466,16 +306,7 @@ class ProductSimilarityCalculator:
         return ""
     
     def _extract_model(self, text, brand):
-        """
-        提取型号
-        
-        参数:
-            text: 输入文本
-            brand: 已提取的品牌
-            
-        返回:
-            型号
-        """
+        """提取型号"""
         if not text:
             return ""
         
@@ -505,35 +336,17 @@ class ProductSimilarityCalculator:
         return model
     
     def _extract_specs(self, text):
-        """
-        提取规格
-        
-        参数:
-            text: 输入文本
-            
-        返回:
-            规格列表
-        """
+        """提取规格"""
         # 匹配数字+单位的组合
         specs = re.findall(
-            r'(\d+(?:\.\d+)?\s*(?:gb|ml|l|英寸|匹|套|片|g|kg|cm|mm|m|年|月|日|小时|分钟|秒))', 
+            r'(\d+(?:\.\d+)?\s*(?:gb|ml|l|英寸|匹|套|片|g|kg|cm|mm))', 
             text
         )
         # 移除空格并转换为小写
         return [re.sub(r'\s+', '', spec).lower() for spec in specs]
     
     def _extract_keywords(self, text, brand, model):
-        """
-        提取关键词
-        
-        参数:
-            text: 输入文本
-            brand: 品牌
-            model: 型号
-            
-        返回:
-            关键词列表
-        """
+        """提取关键词"""
         if not text:
             return []
         
@@ -559,15 +372,7 @@ class ProductSimilarityCalculator:
         return keywords
     
     def _extract_color(self, text):
-        """
-        提取颜色
-        
-        参数:
-            text: 输入文本
-            
-        返回:
-            颜色名称
-        """
+        """提取颜色"""
         if not text:
             return ""
         
@@ -579,16 +384,7 @@ class ProductSimilarityCalculator:
         return ""
     
     def calculate_feature_similarity(self, features1, features2):
-        """
-        计算特征相似度
-        
-        参数:
-            features1: 特征字典1
-            features2: 特征字典2
-            
-        返回:
-            相似度分数（0-1之间）
-        """
+        """计算特征相似度"""
         if not features1 or not features2:
             return 0.0
         
@@ -630,29 +426,14 @@ class ProductSimilarityCalculator:
             
             if self.debug:
                 logger.debug(f"特征相似度计算: {features1} vs {features2} = {total_sim}")
-                logger.debug(f"  品牌相似度: {brand_sim} (权重: {weights['brand']})")
-                logger.debug(f"  型号相似度: {model_sim} (权重: {weights['model']})")
-                logger.debug(f"  规格相似度: {spec_sim} (权重: {weights['specs']})")
-                logger.debug(f"  关键词相似度: {keyword_sim} (权重: {weights['keywords']})")
-                logger.debug(f"  数字相似度: {digit_sim} (权重: {weights['digits']})")
-                logger.debug(f"  颜色相似度: {color_sim} (权重: {weights['color']})")
-            
+                
             return min(max(total_sim, 0.0), 1.0)
         except Exception as e:
             logger.error(f"相似度计算出错: {str(e)}", exc_info=True)
             return 0.0
     
     def _calculate_brand_similarity(self, brand1, brand2):
-        """
-        计算品牌相似度
-        
-        参数:
-            brand1: 品牌1
-            brand2: 品牌2
-            
-        返回:
-            相似度分数
-        """
+        """计算品牌相似度"""
         if not brand1 and not brand2:
             return 0.5  # 都无品牌，视为部分相似
         if not brand1 or not brand2:
@@ -664,16 +445,7 @@ class ProductSimilarityCalculator:
         return fuzz.partial_ratio(brand1, brand2) / 100.0  # 模糊匹配
     
     def _calculate_model_similarity(self, model1, model2):
-        """
-        计算型号相似度
-        
-        参数:
-            model1: 型号1
-            model2: 型号2
-            
-        返回:
-            相似度分数
-        """
+        """计算型号相似度"""
         if not model1 and not model2:
             return 0.5  # 都无型号，视为部分相似
         if not model1 or not model2:
@@ -698,16 +470,7 @@ class ProductSimilarityCalculator:
         return model_sim * 0.4 + digit_match * 0.6
     
     def _calculate_specs_similarity(self, specs1, specs2):
-        """
-        计算规格相似度
-        
-        参数:
-            specs1: 规格列表1
-            specs2: 规格列表2
-            
-        返回:
-            相似度分数
-        """
+        """计算规格相似度"""
         if not specs1 and not specs2:
             return 0.5  # 都无规格，视为部分相似
         
@@ -727,16 +490,7 @@ class ProductSimilarityCalculator:
         return spec_sim * 0.3 + digit_match * 0.7
     
     def _calculate_keywords_similarity(self, keywords1, keywords2):
-        """
-        计算关键词相似度
-        
-        参数:
-            keywords1: 关键词列表1
-            keywords2: 关键词列表2
-            
-        返回:
-            相似度分数
-        """
+        """计算关键词相似度"""
         if not keywords1 and not keywords2:
             return 0.5  # 都无关键词，视为部分相似
         
@@ -744,16 +498,7 @@ class ProductSimilarityCalculator:
         return len(set(keywords1) & set(keywords2)) / len(set(keywords1) | set(keywords2)) if keywords1 or keywords2 else 0.5
     
     def _calculate_digits_similarity(self, digits1, digits2):
-        """
-        计算数字相似度
-        
-        参数:
-            digits1: 数字字符串1
-            digits2: 数字字符串2
-            
-        返回:
-            相似度分数
-        """
+        """计算数字相似度"""
         if not digits1 and not digits2:
             return 0.5  # 都无数字，视为部分相似
         if digits1 == digits2:
@@ -762,68 +507,15 @@ class ProductSimilarityCalculator:
             return 0.7  # 数字部分匹配
         
         # 计算最长公共子序列
-        lcs = longest_common_subsequence(digits1, digits2)
+        lcs = self.longest_common_subsequence(digits1, digits2)
         return len(lcs) / max(len(digits1), len(digits2)) if digits1 and digits2 else 0.0
     
     def _calculate_color_similarity(self, color1, color2):
-        """
-        计算颜色相似度
-        
-        参数:
-            color1: 颜色1
-            color2: 颜色2
-            
-        返回:
-            相似度分数
-        """
+        """计算颜色相似度"""
         return 1.0 if color1 == color2 else 0.0
     
-    def calculate_similarity(self, data):
-        """
-        计算商品名称相似度
-        
-        参数:
-            data: 输入数据，可以是DataFrame或列表
-            
-        返回:
-            相似度列表
-        """
-        results = []
-        
-        # 处理不同输入格式
-        if isinstance(data, pd.DataFrame):
-            for i in range(len(data)):
-                try:
-                    # 获取两列商品名称
-                    str1 = str(data.iloc[i, 0]) if pd.notna(data.iloc[i, 0]) else ""
-                    str2 = str(data.iloc[i, 1]) if pd.notna(data.iloc[i, 1]) else ""
-                    
-                    # 计算相似度
-                    sim = self._calculate_pair_similarity(str1, str2)
-                    results.append(sim)
-                    
-                    if self.debug and i % 100 == 0:
-                        logger.debug(f"已处理 {i+1}/{len(data)} 行数据")
-                except Exception as e:
-                    logger.error(f"处理第 {i} 行数据时出错: {str(e)}", exc_info=True)
-                    results.append(0.0)
-        else:
-            logger.error("输入数据必须是DataFrame")
-            return [0.0] * len(data) if isinstance(data, list) else []
-        
-        return results
-    
     def _calculate_pair_similarity(self, str1, str2):
-        """
-        计算一对商品名称的相似度
-        
-        参数:
-            str1: 商品名称1
-            str2: 商品名称2
-            
-        返回:
-            相似度分数
-        """
+        """计算一对商品名称的相似度"""
         if not str1.strip() or not str2.strip():
             return 0.0
         
@@ -856,33 +548,24 @@ class ProductSimilarityCalculator:
             logger.debug(f"最终相似度: {final_sim} (特征相似度: {feature_sim}, 文本相似度: {text_sim})")
         
         return round(final_sim, 4)
-
-def longest_common_subsequence(s1, s2):
-    """
-    计算最长公共子序列
     
-    参数:
-        s1: 字符串1
-        s2: 字符串2
+    def longest_common_subsequence(self, s1, s2):
+        """计算最长公共子序列"""
+        m, n = len(s1), len(s2)
+        if m == 0 or n == 0:
+            return ""
         
-    返回:
-        最长公共子序列
-    """
-    m, n = len(s1), len(s2)
-    if m == 0 or n == 0:
-        return ""
-    
-    # 动态规划表
-    dp = [[""] * (n + 1) for _ in range(2)]
-    
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if s1[i - 1] == s2[j - 1]:
-                dp[1][j] = dp[0][j - 1] + s1[i - 1]
-            else:
-                dp[1][j] = max(dp[0][j], dp[1][j - 1], key=len)
-        # 滚动数组优化空间复杂度
-        dp[0] = dp[1][:]
-        dp[1] = [""] * (n + 1)
-    
-    return dp[0][n]
+        # 动态规划表
+        dp = [[""] * (n + 1) for _ in range(2)]
+        
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if s1[i - 1] == s2[j - 1]:
+                    dp[1][j] = dp[0][j - 1] + s1[i - 1]
+                else:
+                    dp[1][j] = max(dp[0][j], dp[1][j - 1], key=len)
+            # 滚动数组优化空间复杂度
+            dp[0] = dp[1][:]
+            dp[1] = [""] * (n + 1)
+        
+        return dp[0][n]
