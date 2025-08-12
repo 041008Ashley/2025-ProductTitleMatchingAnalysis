@@ -1,0 +1,34 @@
+import re
+
+def main(input_list):
+    # 初始化结果列表
+    cleaned_brands = []
+    
+    # 遍历输入列表中的每个品牌
+    for brand in input_list:
+        # 确保brand是字符串类型
+        if not isinstance(brand, str):
+            if brand is None:
+                continue
+            try:
+                brand = str(brand)
+            except:
+                continue
+        
+        # 直接提取所有汉字部分（不再依赖横杠分隔符）
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]+', brand)
+        
+        # 如果找到汉字部分，拼接成一个字符串
+        if chinese_chars:
+            brand_name = ''.join(chinese_chars)
+            cleaned_brands.append(brand_name)
+    
+    # 去重处理（保留原始顺序）
+    seen = set()
+    unique_brands = []
+    for brand in cleaned_brands:
+        if brand not in seen:
+            seen.add(brand)
+            unique_brands.append(brand)
+    
+    return unique_brands
