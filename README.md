@@ -36,39 +36,55 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant 主程序 / Main Program
-    participant 数据库 / Database
-    participant 品牌处理模块 / Brand Processing Module
+    participant Main as 主程序 / Main Program
+    participant DB as 数据库 / Database
+    participant BrandModule as 品牌处理模块 / Brand Processing Module
     
-    主程序 / Main Program->>数据库 / Database: 连接请求 / Connection Request
-    数据库 / Database-->>主程序 / Main Program: 连接成功 / Connection Successful
-    主程序 / Main Program->>数据库 / Database: 查询商品名称(spmc) / Query Product Names (spmc)
-    数据库 / Database-->>主程序 / Main Program: 返回商品名称列表 / Return Product Name List
-    主程序 / Main Program->>数据库 / Database: 查询商品规格(gg) / Query Product Specs (gg)
-    数据库 / Database-->>主程序 / Main Program: 返回商品规格列表 / Return Product Spec List
-    主程序 / Main Program->>数据库 / Database: 查询品牌数据(pp) / Query Brand Data (pp)
-    数据库 / Database-->>主程序 / Main Program: 返回品牌列表 / Return Brand List
-    主程序 / Main Program->>品牌处理模块 / Brand Processing Module: 发送品牌数据 / Send Brand Data
-    品牌处理模块 / Brand Processing Module-->>主程序 / Main Program: 返回品牌映射字典 / Return Brand Mapping Dict
+    Main->>DB: 连接请求 / Connection Request
+    DB-->>Main: 连接成功 / Connection Successful
+    Main->>DB: 查询商品名称(spmc) / Query Product Names (spmc)
+    DB-->>Main: 返回商品名称列表 / Return Product Name List
+    Main->>DB: 查询商品规格(gg) / Query Product Specs (gg)
+    DB-->>Main: 返回商品规格列表 / Return Product Spec List
+    Main->>DB: 查询品牌数据(pp) / Query Brand Data (pp)
+    DB-->>Main: 返回品牌列表 / Return Brand List
+    Main->>BrandModule: 发送品牌数据 / Send Brand Data
+    BrandModule-->>Main: 返回品牌映射字典 / Return Brand Mapping Dict
 ```
 
 ### 2. 相似度计算阶段 / Similarity Calculation Phase
 
 ```mermaid
 graph LR
-    subgraph 双层循环比对 / Double Loop Comparison
-        商品规格1 / Spec 1 --> 商品名称1 / Name 1
-        商品规格1 / Spec 1 --> 商品名称2 / Name 2
-        商品规格1 / Spec 1 --> 商品名称3 / Name 3
-        商品规格2 / Spec 2 --> 商品名称1 / Name 1
-        商品规格2 / Spec 2 --> 商品名称2 / Name 2
-        商品规格2 / Spec 2 --> 商品名称3 / Name 3
+    %% 定义主流程节点
+    DoubleLoop[双层循环比对 / Double Loop Comparison]
+    MethodA[方法A / Method A]
+    MethodB[方法B / Method B]
+    Result[结果表 / Result Table]
+    
+    %% 定义子图：双层循环比对逻辑
+    subgraph SubGraph [双层循环比对逻辑]
+        direction TB
+        Spec1[商品规格1 / Spec 1]
+        Spec2[商品规格2 / Spec 2]
+        Name1[商品名称1 / Name 1]
+        Name2[商品名称2 / Name 2]
+        Name3[商品名称3 / Name 3]
+        
+        %% 子图内部连接
+        Spec1 --> Name1
+        Spec1 --> Name2
+        Spec1 --> Name3
+        Spec2 --> Name1
+        Spec2 --> Name2
+        Spec2 --> Name3
     end
     
-    双层循环比对 / Double Loop Comparison --> 方法A / Method A
-    双层循环比对 / Double Loop Comparison --> 方法B / Method B
-    方法A / Method A --> 结果表 / Result Table
-    方法B / Method B --> 结果表 / Result Table
+    %% 主流程连接
+    DoubleLoop --> MethodA
+    DoubleLoop --> MethodB
+    MethodA --> Result
+    MethodB --> Result
 ```
 
 ### 3. 结果存储阶段 / Result Storage Phase
@@ -126,7 +142,7 @@ def calculate_similarity(input_data, config_path=None, debug=False, sppp=None):
             raise TypeError("输入数据必须是包含两个文本的列表 / Input data must be a list containing two texts")
         
         # 计算单对文本的相似度 / Calculate similarity for a single pair of texts
-        similarity = calculator._calculate_pair_similarity(str1, str2)
+        similarity = calculator.calculate_pair_similarity(str1, str2)
         return similarity
     
     except Exception as e:
@@ -139,7 +155,7 @@ class ProductSimilarityCalculator:
         text = text.lower().strip()
         
         # 统一特殊字符 / Unify special characters
-        text = re.sub(r'[*/×x&（）【】、，。！？；："“”‘’\-_]', ' ', text)
+        text = re.sub(r'[*/×x&（）【】、，。！？；："「」"''\-_]', ' ', text)
         
         # 品牌缩写替换 / Brand abbreviation replacement
         for abbr, brand in self.brand_mapping.items():
@@ -164,9 +180,12 @@ class ProductSimilarityCalculator:
     
     def extract_features(self, text):
         """提取文本特征 / Extract Text Features"""
+        brand = self._extract_brand(text)
+        model = self._extract_model(text, brand)
+        
         features = {
-            "brand": self._extract_brand(text),
-            "model": self._extract_model(text, brand),
+            "brand": brand,
+            "model": model,
             "specs": self._extract_specs(text),
             "keywords": self._extract_keywords(text, brand, model),
             "digits": ''.join(re.findall(r'\d+', text)),
@@ -179,7 +198,10 @@ class ProductSimilarityCalculator:
         # 计算各特征维度相似度 / Calculate similarity for each feature dimension
         brand_sim = self._calculate_brand_similarity(features1["brand"], features2["brand"])
         model_sim = self._calculate_model_similarity(features1["model"], features2["model"])
-        # ...其他特征相似度计算 / ...Other feature similarity calculations
+        spec_sim = self._calculate_spec_similarity(features1["specs"], features2["specs"])
+        keyword_sim = self._calculate_keyword_similarity(features1["keywords"], features2["keywords"])
+        digit_sim = self._calculate_digit_similarity(features1["digits"], features2["digits"])
+        color_sim = self._calculate_color_similarity(features1["color"], features2["color"])
         
         # 加权综合 / Weighted synthesis
         weights = self.feature_weights
@@ -239,14 +261,20 @@ def calculate_similarities(input_data):
     # 提取所有标题构建语料库 / Extract all titles to build a corpus
     all_titles = []
     for t1, t2 in title_pairs:
-        all_titles.append(preprocess_text(t1))
-        all_titles.append(preprocess_text(t2))
+        processed_t1 = preprocess_text(t1) if t1 is not None else ""
+        processed_t2 = preprocess_text(t2) if t2 is not None else ""
+        all_titles.append(processed_t1)
+        all_titles.append(processed_t2)
     
     # 创建TF-IDF向量化器 / Create TF-IDF vectorizer
     vectorizer = TfidfVectorizer(tokenizer=lambda x: x.split(), token_pattern=None)
     tfidf_matrix = vectorizer.fit_transform(all_titles)
     
-    preprocessed = [(preprocess_text(t1), preprocess_text(t2)) for t1, t2 in title_pairs]
+    preprocessed = [
+        (preprocess_text(t1) if t1 is not None else "", 
+         preprocess_text(t2) if t2 is not None else "") 
+        for t1, t2 in title_pairs
+    ]
     results = []
     
     for i, (t1, t2) in enumerate(preprocessed):
@@ -262,7 +290,7 @@ def calculate_similarities(input_data):
         final_sim = 0.2 * tfidf_sim + 0.8 * other_sim
         results.append(round(final_sim, 4))
     
-    return results[0]
+    return results[0] if results else 0.0
 
 def compute_similarity(t1, t2):
     """智能相似度计算引擎 / Intelligent Similarity Calculation Engine"""
@@ -303,46 +331,51 @@ def semantic_analysis(text1, text2):
 
 ```mermaid
 sequenceDiagram
-    participant 主程序 / Main Program
-    participant 数据库 / Database
-    participant 方法A / Method A
-    participant 方法B / Method B
+    participant Main as 主程序 / Main Program
+    participant DB as 数据库 / Database
+    participant MethodA as 方法A / Method A
+    participant MethodB as 方法B / Method B
     
-    主程序 / Main Program->>数据库 / Database: 连接数据库 / Connect to Database
-    主程序 / Main Program->>数据库 / Database: 获取商品名称(spmc) / Get Product Names (spmc)
-    主程序 / Main Program->>数据库 / Database: 获取商品规格(gg) / Get Product Specs (gg)
-    主程序 / Main Program->>数据库 / Database: 获取品牌数据(pp) / Get Brand Data (pp)
-    主程序 / Main Program->>方法A / Method A: 处理品牌数据 / Process Brand Data
-    方法A / Method A-->>主程序 / Main Program: 品牌映射字典 / Brand Mapping Dictionary
+    Main->>DB: 连接数据库 / Connect to Database
+    Main->>DB: 获取商品名称(spmc) / Get Product Names (spmc)
+    DB-->>Main: 返回商品名称列表 / Return Product Name List
+    Main->>DB: 获取商品规格(gg) / Get Product Specs (gg)
+    DB-->>Main: 返回商品规格列表 / Return Product Spec List
+    Main->>DB: 获取品牌数据(pp) / Get Brand Data (pp)
+    DB-->>Main: 返回品牌列表 / Return Brand List
+    Main->>MethodA: 处理品牌数据 / Process Brand Data
+    MethodA-->>Main: 品牌映射字典 / Brand Mapping Dictionary
     
     loop 双层循环比对 / Double Loop Comparison
-        主程序 / Main Program->>方法A / Method A: 发送商品名称+规格 / Send Product Name+Spec
-        方法A / Method A-->>主程序 / Main Program: 返回方法A相似度 / Return Method A Similarity
-        主程序 / Main Program->>方法B / Method B: 发送商品名称+规格 / Send Product Name+Spec
-        方法B / Method B-->>主程序 / Main Program: 返回方法B相似度 / Return Method B Similarity
-        主程序 / Main Program->>数据库 / Database: 存储结果 / Store Results
+        Main->>MethodA: 发送商品名称+规格 / Send Product Name+Spec
+        MethodA-->>Main: 返回方法A相似度 / Return Method A Similarity
+        Main->>MethodB: 发送商品名称+规格 / Send Product Name+Spec
+        MethodB-->>Main: 返回方法B相似度 / Return Method B Similarity
+        Main->>DB: 存储结果 / Store Results
     end
     
-    主程序 / Main Program->>数据库 / Database: 关闭连接 / Close Connection
+    Main->>DB: 关闭连接 / Close Connection
 ```
 
 ### 核心集成代码 / Core Integration Code
 
 ```python
 # 数据库连接配置 / Database Connection Configuration
-数据库对象 = Database.DBConnect(SZEnv['rpa'], 1, [
-    {"name":"DataSource","value":"192.168.99.179"},
-    {"name":"DbName","value":"pricedb"},
-    {"name":"Port","value":9826},
-    {"name":"UserName","value":"sa"},
-    {"name":"Pwd","value":"U2VydmVyY2YxZThj"}
-])
+db_config = [
+    {"name": "DataSource", "value": "192.168.99.179"},
+    {"name": "DbName", "value": "pricedb"},
+    {"name": "Port", "value": 9826},
+    {"name": "UserName", "value": "sa"},
+    {"name": "Pwd", "value": "U2VydmVyY2YxZThj"}
+]
+
+数据库对象 = Database.DBConnect(SZEnv['rpa'], 1, db_config)
 
 try:
     # 从数据库获取数据 / Get data from database
-    spmc = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "select top 13 spmc from cj_spzd")
-    spxx = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "select top 6 gg from cj_rw_spxx")
-    brand = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "select pp from cj_spzd")
+    spmc = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "SELECT TOP 13 spmc FROM cj_spzd")
+    spxx = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "SELECT TOP 6 gg FROM cj_rw_spxx")
+    brand = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "SELECT pp FROM cj_spzd")
     
     # 处理品牌映射 / Process brand mapping
     brand_list = Basic.SetVariable(SZEnv['rpa'], brand, var_ret=1)
@@ -364,7 +397,7 @@ try:
             Database.SQLExecute(
                 SZEnv['rpa'], 
                 数据库对象, 
-                "INSERT INTO cj_sppp VALUES (?, ?, ?, ?)", 
+                "INSERT INTO cj_sppp (spmc, gg, similarity_a, similarity_b) VALUES (?, ?, ?, ?)", 
                 [当前spmc, 当前spxx, result_a, result_b]
             )
             
@@ -508,7 +541,7 @@ cleaned = main(raw_brands)
 ### 在商品相似度系统中的调用 / Call in Product Similarity System
 ```python
 # 从数据库获取原始品牌数据 / Get raw brand data from database
-brand_data = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "select pp from cj_spzd")
+brand_data = Database.SingleSQLQuery(SZEnv['rpa'], 数据库对象, "SELECT pp FROM cj_spzd")
 
 # 处理品牌数据 / Process brand data
 cleaned_brands = main(brand_data)
@@ -523,16 +556,16 @@ result = calculate_similarity(input_data, sppp=sppp)
 ### 数据处理流程图 / Data Processing Flowchart
 ```mermaid
 sequenceDiagram
-    participant 数据库 / Database
-    participant 品牌处理模块 / Brand Processing Module
-    participant 相似度计算模块 / Similarity Calculation Module
+    participant DB as 数据库 / Database
+    participant BrandModule as 品牌处理模块 / Brand Processing Module
+    participant SimModule as 相似度计算模块 / Similarity Calculation Module
     
-    数据库 / Database->>品牌处理模块 / Brand Processing Module: 原始品牌数据 / Raw Brand Data
-    品牌处理模块 / Brand Processing Module->>品牌处理模块 / Brand Processing Module: 清洗和提取中文 / Clean and Extract Chinese
-    品牌处理模块 / Brand Processing Module->>品牌处理模块 / Brand Processing Module: 去重处理 / Deduplication
-    品牌处理模块 / Brand Processing Module->>相似度计算模块 / Similarity Calculation Module: 品牌映射字典(sppp) / Brand Mapping Dictionary (sppp)
-    相似度计算模块 / Similarity Calculation Module->>相似度计算模块 / Similarity Calculation Module: 使用sppp进行相似度计算 / Use sppp for Similarity Calculation
-    相似度计算模块 / Similarity Calculation Module->>数据库 / Database: 存储结果 / Store Results
+    DB->>BrandModule: 原始品牌数据 / Raw Brand Data
+    BrandModule->>BrandModule: 清洗和提取中文 / Clean and Extract Chinese
+    BrandModule->>BrandModule: 去重处理 / Deduplication
+    BrandModule->>SimModule: 品牌映射字典(sppp) / Brand Mapping Dictionary (sppp)
+    SimModule->>SimModule: 使用sppp进行相似度计算 / Use sppp for Similarity Calculation
+    SimModule->>DB: 存储结果 / Store Results
 ```
 
 ## 处理规则说明 / Processing Rules Description
@@ -587,15 +620,15 @@ sequenceDiagram
 1. **配置数据库连接** / **Configure Database Connection**：
    ```python
    # 配置数据库连接参数 / Configure database connection parameters
-   数据库对象 = Database.DBConnect(
-       SZEnv['rpa'], 
-       1, 
-       [{"name":"DataSource","value":"192.168.99.179"},
-        {"name":"DbName","value":"pricedb"},
-        {"name":"Port","value":9826},
-        {"name":"UserName","value":"sa"},
-        {"name":"Pwd","value":"U2VydmVyY2YxZThj"}]
-   )
+   db_config = [
+       {"name": "DataSource", "value": "192.168.99.179"},
+       {"name": "DbName", "value": "pricedb"},
+       {"name": "Port", "value": 9826},
+       {"name": "UserName", "value": "sa"},
+       {"name": "Pwd", "value": "U2VydmVyY2YxZThj"}
+   ]
+   
+   数据库对象 = Database.DBConnect(SZEnv['rpa'], 1, db_config)
    ```
 
 2. **执行相似度计算** / **Execute Similarity Calculation**：
@@ -613,9 +646,9 @@ sequenceDiagram
    ```sql
    -- 查询高相似度商品对 / Query high similarity product pairs
    SELECT * FROM cj_sppp 
-   WHERE methodA_similarity > 0.8 
-      OR methodB_similarity > 0.8
-   ORDER BY methodA_similarity DESC;
+   WHERE similarity_a > 0.8 
+      OR similarity_b > 0.8
+   ORDER BY similarity_a DESC;
    ```
 
 4. **优化建议** / **Optimization Suggestions**：
@@ -630,3 +663,5 @@ sequenceDiagram
 📧 smytz6@163.com  
 
 **最后更新** / **Last Updated**：2025-8-24
+
+---
